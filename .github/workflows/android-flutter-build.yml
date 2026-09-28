@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-android-runtime:
@@ -192,3 +192,27 @@ jobs:
           path: tools/release/dist/operit2-app-android-*.apk
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish APKs to a downloadable branch
+        shell: pwsh
+        run: |
+          $outDir = "tool/apk-out"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          Copy-Item tools/release/dist/operit2-app-android-*.apk $outDir
+          $version = (Select-String -Path apps/flutter/app/pubspec.yaml -Pattern '^version:\s*(\d+\.\d+\.\d+)\+(\d+)\s*$').Matches
+          $tag = "apk-$($version[0].Groups[1].Value)"
+          @"
+          # APK build output
+
+          Build: Operit2 $tag (commit ${{ github.sha }})
+          Self-signed preview build. Install app-arm64-v8a-release.apk on arm64 devices.
+          "@ | Set-Content -Path "$outDir/README.md" -Encoding utf8
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan apk-dist
+          git rm -rf --quiet . 2>$null
+          Remove-Item -Recurse -Force * -ErrorAction SilentlyContinue
+          Copy-Item "$outDir/*" . -Force
+          git add -A
+          git commit -m "Publish Android APKs for $tag"
+          git push --force origin apk-dist
