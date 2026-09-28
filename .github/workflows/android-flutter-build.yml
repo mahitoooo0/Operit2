@@ -100,6 +100,16 @@ jobs:
         with:
           node-version: 22
 
+      - name: Enable pnpm and install plugin buildin dependencies
+        shell: pwsh
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.7.0 --activate
+          pnpm --version
+          Push-Location plugins/packages/buildin/workflow
+          pnpm install --frozen-lockfile
+          Pop-Location
+
       - name: Install Java
         uses: actions/setup-java@v4
         with:
