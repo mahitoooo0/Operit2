@@ -116,6 +116,17 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Generate self-signed debug keystore
+        shell: pwsh
+        run: |
+          $store = Join-Path $env:GITHUB_WORKSPACE "operit2-local.keystore"
+          keytool -genkeypair -v -keystore $store -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Operit2 Local Build"
+          $props = "apps/flutter/app/android/local.properties"
+          Add-Content -Path $props -Value "RELEASE_STORE_FILE=$($store.Replace('\','/'))"
+          Add-Content -Path $props -Value "RELEASE_STORE_PASSWORD=android"
+          Add-Content -Path $props -Value "RELEASE_KEY_ALIAS=androiddebugkey"
+          Add-Content -Path $props -Value "RELEASE_KEY_PASSWORD=android"
+
       - name: Install FVM
         shell: pwsh
         run: |
@@ -164,7 +175,15 @@ jobs:
           if ($version.Count -ne 1) {
             throw "apps/flutter/app/pubspec.yaml must contain exactly one release version line"
           }
-          python tools/build_scripts/build_flutter_android.py --build-name $version[0].Groups[1].Value --build-number $version[0].Groups[2].Value --enforce-lockfile --skip-signing
+          $exit = 1
+          foreach ($attempt in 1..3) {
+            python tools/build_scripts/build_flutter_android.py --build-name $version[0].Groups[1].Value --build-number $version[0].Groups[2].Value --enforce-lockfile --skip-signing
+            $exit = $LASTEXITCODE
+            if ($exit -eq 0) { break }
+            Write-Host "android build attempt $attempt failed; retrying after mirror backoff"
+            Start-Sleep -Seconds (60 * $attempt)
+          }
+          if ($exit -ne 0) { throw "build_flutter_android.py failed after 3 attempts" }
 
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v4
