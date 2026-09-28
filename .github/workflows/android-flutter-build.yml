@@ -235,36 +235,67 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Publish APKs to a downloadable branch
+      - name: Publish APKs to a GitHub release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           $ErrorActionPreference = 'stop'
-          $stage = Join-Path $env:RUNNER_TEMP "apk-stage"
-          New-Item -ItemType Directory -Force -Path $stage | Out-Null
-          Copy-Item tools/release/dist/operit2-app-android-*.apk $stage
-          $version = (Select-String -Path apps/flutter/app/pubspec.yaml -Pattern '^version:\s*(\d+\.\d+\.\d+)\+(\d+)\s*$').Matches
-          $tag = "apk-$($version[0].Groups[1].Value)"
-          @"
-          # APK build output
 
-          Operit2 $tag, commit ${{ github.sha }}.
-          Self-signed preview build. Install app-arm64-v8a-release.apk on arm64 devices.
-          "@ | Set-Content -Path "$stage/README.md" -Encoding utf8
+          function Get-CargoVersion([string]$manifest) {
+              $hit = Select-String -Path $manifest -Pattern '^version = "([^"]+)"' | Select-Object -First 1
+              if (-not $hit) { throw "No version field found in $manifest" }
+              return $hit.Matches[0].Groups[1].Value
+          }
 
-          $dist = Join-Path $env:RUNNER_TEMP "apk-dist-repo"
-          if (Test-Path $dist) { Remove-Item -Recurse -Force $dist }
-          New-Item -ItemType Directory -Force -Path $dist | Out-Null
-          Copy-Item "$stage/*" $dist -Force
+          $cliVersion = Get-CargoVersion "apps/cli/Cargo.toml"
+          $runtimeVersion = Get-CargoVersion "core/crates/runtime/application/Cargo.toml"
+          if ($cliVersion -ne $runtimeVersion) {
+              throw "CLI version $cliVersion does not match runtime version $runtimeVersion"
+          }
+          if ($cliVersion.Contains("+")) {
+              throw "Release version $cliVersion must not include build metadata"
+          }
 
-          Push-Location $dist
-          git init --quiet --initial-branch=apk-dist
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add --all
-          git commit --quiet -m "Publish Android APKs for $tag"
-          git remote add origin "https://x-access-token:$($env:GH_TOKEN)@github.com/${{ github.repository }}.git"
-          git push --force origin "refs/heads/apk-dist:refs/heads/apk-dist"
-          if ($LASTEXITCODE -ne 0) { throw "git push to apk-dist failed with exit code $LASTEXITCODE" }
-          Pop-Location
+          $flutterMatch = (Select-String -Path "apps/flutter/app/pubspec.yaml" -Pattern '^version:\s*(\d+\.\d+\.\d+)\+(\d+)\s*$').Matches
+          if ($flutterMatch.Count -ne 1) {
+              throw "apps/flutter/app/pubspec.yaml must contain exactly one release version line"
+          }
+          $releaseCore = $cliVersion -replace '-.*$', ''
+          if ($flutterMatch[0].Groups[1].Value -ne $releaseCore) {
+              throw "Flutter version $($flutterMatch[0].Groups[1].Value) does not match release version $releaseCore"
+          }
+
+          $assets = @()
+          foreach ($name in @(
+              "operit2-app-android-arm64-v8a.apk"
+              "operit2-app-android-armeabi-v7a.apk"
+              "operit2-app-android-x86_64.apk"
+          )) {
+              $path = Join-Path "tools/release/dist" $name
+              if (-not (Test-Path -LiteralPath $path)) {
+                  throw "Missing release asset $name"
+              }
+              $assets += (Resolve-Path -LiteralPath $path).Path
+          }
+
+          $tag = "v$cliVersion"
+          $prerelease = $cliVersion.Contains("-")
+          $pages = gh api "repos/$env:GH_REPO/releases" --paginate --slurp | ConvertFrom-Json
+          $existing = @($pages | ForEach-Object { $_ } | Where-Object { $_.tag_name -eq $tag }) | Select-Object -First 1
+
+          if (-not $existing) {
+              $notes = "Operit2 $cliVersion, commit ${{ github.sha }}.`nSelf-signed preview build. Install operit2-app-android-arm64-v8a.apk on arm64 devices."
+              $createArgs = @("release", "create", $tag, "--repo", $env:GH_REPO, "--title", "Operit2 $cliVersion", "--notes", $notes)
+              if ($prerelease) { $createArgs += "--prerelease" }
+              & gh @createArgs
+              if ($LASTEXITCODE -ne 0) { throw "gh release create failed with exit code $LASTEXITCODE" }
+          }
+          elseif ([bool]$existing.prerelease -ne $prerelease) {
+              throw "Release $tag has prerelease=$($existing.prerelease) but version $cliVersion requires prerelease=$prerelease"
+          }
+
+          $uploadArgs = @("release", "upload", $tag, "--repo", $env:GH_REPO, "--clobber") + $assets
+          & gh @uploadArgs
+          if ($LASTEXITCODE -ne 0) { throw "gh release upload failed with exit code $LASTEXITCODE" }
