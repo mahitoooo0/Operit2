@@ -198,6 +198,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $ErrorActionPreference = 'stop'
           $stage = Join-Path $env:RUNNER_TEMP "apk-stage"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           Copy-Item tools/release/dist/operit2-app-android-*.apk $stage
@@ -210,15 +211,18 @@ jobs:
           Self-signed preview build. Install app-arm64-v8a-release.apk on arm64 devices.
           "@ | Set-Content -Path "$stage/README.md" -Encoding utf8
 
-          if (Test-Path "tool/apk-out") { Remove-Item -Recurse -Force "tool/apk-out" }
-          New-Item -ItemType Directory -Force -Path "tool/apk-out" | Out-Null
-          Copy-Item "$stage/*" "tool/apk-out" -Force
+          $dist = Join-Path $env:RUNNER_TEMP "apk-dist-repo"
+          if (Test-Path $dist) { Remove-Item -Recurse -Force $dist }
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          Copy-Item "$stage/*" $dist -Force
 
+          Push-Location $dist
+          git init --quiet --initial-branch=apk-dist
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout --orphan apk-dist
-          git reset --hard
-          git clean -fdx
-          git add -f tool/apk-out
-          git commit -m "Publish Android APKs for $tag"
-          git push --force origin apk-dist
+          git add --all
+          git commit --quiet -m "Publish Android APKs for $tag"
+          git remote add origin "https://x-access-token:$($env:GH_TOKEN)@github.com/${{ github.repository }}.git"
+          git push --force origin "refs/heads/apk-dist:refs/heads/apk-dist"
+          if ($LASTEXITCODE -ne 0) { throw "git push to apk-dist failed with exit code $LASTEXITCODE" }
+          Pop-Location
