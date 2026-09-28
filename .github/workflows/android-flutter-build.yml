@@ -158,16 +158,35 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Generate self-signed debug keystore
+      - name: Restore Android release signing key
         shell: pwsh
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
         run: |
-          $store = Join-Path $env:GITHUB_WORKSPACE "operit2-local.keystore"
-          keytool -genkeypair -v -keystore $store -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Operit2 Local Build"
+          $ErrorActionPreference = 'stop'
+          foreach ($pair in @(
+              @("ANDROID_RELEASE_KEYSTORE_BASE64", $env:KEYSTORE_BASE64),
+              @("ANDROID_RELEASE_STORE_PASSWORD", $env:STORE_PASSWORD),
+              @("ANDROID_RELEASE_KEY_ALIAS", $env:KEY_ALIAS),
+              @("ANDROID_RELEASE_KEY_PASSWORD", $env:KEY_PASSWORD)
+          )) {
+              if ([string]::IsNullOrWhiteSpace($pair[1])) {
+                  throw "Missing repository secret $($pair[0]); a stable signing key is required so updates install over the previous build"
+              }
+          }
+
+          $store = Join-Path $env:RUNNER_TEMP "operit2-release.jks"
+          [IO.File]::WriteAllBytes($store, [Convert]::FromBase64String($env:KEYSTORE_BASE64))
+          Write-Host "Restored release keystore ($((Get-Item $store).Length) bytes) with alias $($env:KEY_ALIAS)"
+
           $props = "apps/flutter/app/android/local.properties"
           Add-Content -Path $props -Value "RELEASE_STORE_FILE=$($store.Replace('\','/'))"
-          Add-Content -Path $props -Value "RELEASE_STORE_PASSWORD=android"
-          Add-Content -Path $props -Value "RELEASE_KEY_ALIAS=androiddebugkey"
-          Add-Content -Path $props -Value "RELEASE_KEY_PASSWORD=android"
+          Add-Content -Path $props -Value "RELEASE_STORE_PASSWORD=$($env:STORE_PASSWORD)"
+          Add-Content -Path $props -Value "RELEASE_KEY_ALIAS=$($env:KEY_ALIAS)"
+          Add-Content -Path $props -Value "RELEASE_KEY_PASSWORD=$($env:KEY_PASSWORD)"
 
       - name: Install FVM
         shell: pwsh
