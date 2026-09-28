@@ -195,6 +195,8 @@ jobs:
 
       - name: Publish APKs to a downloadable branch
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           $stage = Join-Path $env:RUNNER_TEMP "apk-stage"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
@@ -204,15 +206,19 @@ jobs:
           @"
           # APK build output
 
-          Build: Operit2 $tag (commit ${{ github.sha }})
+          Operit2 $tag, commit ${{ github.sha }}.
           Self-signed preview build. Install app-arm64-v8a-release.apk on arm64 devices.
           "@ | Set-Content -Path "$stage/README.md" -Encoding utf8
+
+          if (Test-Path "tool/apk-out") { Remove-Item -Recurse -Force "tool/apk-out" }
+          New-Item -ItemType Directory -Force -Path "tool/apk-out" | Out-Null
+          Copy-Item "$stage/*" "tool/apk-out" -Force
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout --orphan apk-dist
-          git rm -rf --quiet . 2>$null
-          Remove-Item -Recurse -Force * -ErrorAction SilentlyContinue
-          Copy-Item "$stage/*" . -Force
-          git add -A
+          git reset --hard
+          git clean -fdx
+          git add -f tool/apk-out
           git commit -m "Publish Android APKs for $tag"
           git push --force origin apk-dist
