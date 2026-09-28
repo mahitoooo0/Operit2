@@ -6,7 +6,8 @@ zip_path="$cache_dir/android-ndk-r29-beta4-linux.zip"
 ndk_dir="$cache_dir/android-ndk-r29-beta4"
 
 mkdir -p "$cache_dir"
-curl -L -o "$zip_path" "https://dl.google.com/android/repository/android-ndk-r29-beta4-linux.zip"
+curl -L --fail --retry 5 --retry-delay 30 --retry-all-errors \
+    -o "$zip_path" "https://dl.google.com/android/repository/android-ndk-r29-beta4-linux.zip"
 rm -rf "$ndk_dir"
 unzip -q "$zip_path" -d "$cache_dir"
 

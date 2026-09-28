@@ -38,10 +38,51 @@ $items = @(
     }
 )
 
+function Test-VerifiedArchive {
+    param(
+        [string]$Path,
+        [string]$ExpectedSha256
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $false
+    }
+
+    return (Get-FileHash -Algorithm SHA256 -Path $Path).Hash.ToUpperInvariant() -eq $ExpectedSha256
+}
+
+function Invoke-Download {
+    param(
+        [string]$Uri,
+        [string]$OutFile,
+        [int]$MaxAttempts = 5
+    )
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            Invoke-WebRequest -Uri $Uri -OutFile $OutFile
+            return
+        }
+        catch {
+            if ($attempt -eq $MaxAttempts) {
+                throw
+            }
+            $delay = 30 * $attempt
+            Write-Host "Download of $Uri failed ($($_.Exception.Message)); retry $attempt/$MaxAttempts in ${delay}s"
+            Start-Sleep -Seconds $delay
+        }
+    }
+}
+
 foreach ($item in $items) {
     $archivePath = Join-Path $downloadsDir $item.Archive
-    Write-Host "Downloading $($item.Name)"
-    Invoke-WebRequest -Uri $item.Url -OutFile $archivePath
+    if (Test-VerifiedArchive -Path $archivePath -ExpectedSha256 $item.Sha256) {
+        Write-Host "Reusing verified $($item.Name)"
+    }
+    else {
+        Write-Host "Downloading $($item.Name)"
+        Invoke-Download -Uri $item.Url -OutFile $archivePath
+    }
 
     $actualSha256 = (Get-FileHash -Algorithm SHA256 -Path $archivePath).Hash.ToUpperInvariant()
     if ($actualSha256 -ne $item.Sha256) {
